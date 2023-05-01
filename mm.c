@@ -13,7 +13,7 @@
 
 /* If you want debugging output, use the following macro.  When you hand
  * in, remove the #define DEBUG line. */
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
 #define dbg_printf(...) printf(__VA_ARGS__)
 #else
@@ -41,15 +41,14 @@
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
-#define SIZE_PTR(p) ((size_t *)(((char *)(p)) - SIZE_T_SIZE))
-
 /* the pointer to the prologue block */
 static char *heap_listp = 0;
 
+static int cnt = 0;
+
 /* read or write a word at address p */
 #define GET(p) ((p) ? *(unsigned int *)(p) : 0)
+#define GET_PTR(p) ((p) ? (void *)*(size_t *)(p) : 0)
 #define PUT(p, val) ((p) ? *(unsigned int *)(p) = (val) : 0)
 #define PUT_PTR(p, ptr) ((p) ? *(size_t *)(p) = (size_t)(ptr) : 0)
 
@@ -59,8 +58,10 @@ static char *heap_listp = 0;
 
 /* given block ptr bp, compute address of its header, footer, prev, and next */
 #define HEAD(bp) ((char *)(bp) - WSIZE)
-#define PRE_BLK(bp) ((char *)(bp))
-#define NXT_BLK(bp) ((bp) ? (char *)(bp) + DSIZE : (char *)0)
+#define PRE_BLK_F(bp) ((char *)(bp))
+#define NXT_BLK_F(bp) ((bp) ? (char *)(bp) + DSIZE : (char *)0)
+#define PRE_BLK_AT(bp) (GET_PTR(PRE_BLK_F(bp)))
+#define NXT_BLK_AT(bp) (GET_PTR(NXT_BLK_F(bp)))
 #define FOOT(bp) ((char *)(bp) + READ_SIZE(HEAD(bp)) - DSIZE)
 
 #define L_BLK(bp) ((char *)(bp) - READ_SIZE((char *)(bp) - DSIZE))
@@ -80,24 +81,28 @@ int mm_init(void) {
   PUT(heap_listp + 6 * WSIZE, PACK(6 * WSIZE, 1)); /* prologue footer */
   PUT(heap_listp + 7 * WSIZE, PACK(0, 1));         /* epilogue header */
   heap_listp += 2 * WSIZE;
+  dbg_printf("heap_size = %ld\n", mem_heapsize());
   return 0;
 }
 
 static void delete_from_list(void *bp) {
-  PUT_PTR(NXT_BLK(PRE_BLK(bp)), NXT_BLK(bp));
-  PUT_PTR(PRE_BLK(NXT_BLK(bp)), PRE_BLK(bp));
+  dbg_printf("delete_from_list, pre = %p\n", PRE_BLK_AT(bp));
+  PUT_PTR(NXT_BLK_F(PRE_BLK_AT(bp)), NXT_BLK_AT(bp));
+  PUT_PTR(PRE_BLK_F(NXT_BLK_AT(bp)), PRE_BLK_AT(bp));
 }
 static void add_to_list(void *bp) {
-  void *last_blk = NXT_BLK(heap_listp);
-  PUT_PTR(PRE_BLK(last_blk), bp);
-  PUT_PTR(NXT_BLK(bp), last_blk);
-  PUT_PTR(PRE_BLK(bp), heap_listp);
-  PUT_PTR(NXT_BLK(heap_listp), bp);
+  void *last_blk = NXT_BLK_AT(heap_listp);
+  PUT_PTR(PRE_BLK_F(last_blk), bp);
+  PUT_PTR(NXT_BLK_F(bp), last_blk);
+  PUT_PTR(PRE_BLK_F(bp), heap_listp);
+  PUT_PTR(NXT_BLK_F(heap_listp), bp);
 }
 
 static void *coalesce_and_add(void *bp) {
+  dbg_printf("coalesce_and_add, bp = %p\n", bp);
   size_t size = READ_SIZE(HEAD(bp));
   if (!READ_ALLOC(FOOT(L_BLK(bp)))) {
+    dbg_printf("coalesce left, bp = %p\n", L_BLK(bp));
     size += READ_SIZE(FOOT(L_BLK(bp)));
     delete_from_list(L_BLK(bp));
     bp = L_BLK(bp);
@@ -105,11 +110,13 @@ static void *coalesce_and_add(void *bp) {
     PUT(FOOT(bp), PACK(size, 0));
   }
   if (!READ_ALLOC(HEAD(R_BLK(bp)))) {
+    dbg_printf("coalesce right, bp = %p\n", R_BLK(bp));
     size += READ_SIZE(HEAD(R_BLK(bp)));
     delete_from_list(R_BLK(bp));
     PUT(HEAD(bp), PACK(size, 0));
     PUT(FOOT(bp), PACK(size, 0));
   }
+  dbg_printf("coalesce size = %ld, bp = %p\n", size, bp);
   add_to_list(bp);
   return bp;
 }
@@ -120,6 +127,7 @@ static void *coalesce_and_add(void *bp) {
  */
 static void place(void *bp, size_t size) {
   size_t blk_size = READ_SIZE(HEAD(bp));
+  dbg_printf("place, is_alloc = %u\n", READ_ALLOC(HEAD(bp)));
   if (!READ_ALLOC(HEAD(bp))) delete_from_list(bp);
   if (blk_size >= size + MIN_BLK_SIZE) { /* split */
     PUT(HEAD(bp), PACK(size, 1));
@@ -139,7 +147,7 @@ static void place(void *bp, size_t size) {
  */
 static void *extend_heap(size_t size) {
   void *bp = mem_sbrk(size);
-  if ((int)bp == -1) return NULL;
+  if (bp == (void *)-1) return NULL;
   PUT(HEAD(bp), PACK(size, 0));
   PUT(FOOT(bp), PACK(size, 0));
   PUT(HEAD(R_BLK(bp)), PACK(0, 1)); /* new epilogue header */
@@ -151,14 +159,21 @@ static void *extend_heap(size_t size) {
  *      Always allocate a block whose size is a multiple of the alignment.
  */
 void *malloc(size_t size) {
-  if (size == 0) return NULL;
-  size = ALIGN(size + 2 * WSIZE);
-  char *bp = NXT_BLK(heap_listp);
-  for (; bp; bp = NXT_BLK(bp)) /* explicit free list */
+  // if (size == 0) return NULL;
+  ++cnt; dbg_printf("#%d malloc %ld\n", cnt, size);
+  size = ALIGN(MAX(MIN_BLK_SIZE, size + 2 * WSIZE));
+  void *bp = NXT_BLK_AT(heap_listp);
+  dbg_printf("bp = %p\n", bp);
+  for (; bp; bp = NXT_BLK_AT(bp)) { /* explicit free list */
+    assert(!READ_ALLOC(HEAD(bp)));
     if (READ_SIZE(HEAD(bp)) >= size) {
+      dbg_printf("found %u\n", READ_SIZE(HEAD(bp)));
       place(bp, size);
+      dbg_printf("place done, bp = %p\n", bp);
       return bp;
     }
+  }
+  dbg_printf("extend_heap %ld\n", MAX(CHUNKSIZE, size));
   /* need to extend the heap */
   bp = extend_heap(MAX(CHUNKSIZE, size));
   if (bp != NULL) place(bp, size);
@@ -170,6 +185,8 @@ void *malloc(size_t size) {
  *      Computers have big memories; surely it won't be a problem.
  */
 void free(void *ptr) {
+  ++cnt; dbg_printf("#%d free %p\n", cnt, ptr);
+  if (ptr < mem_heap_lo() || ptr > mem_heap_hi()) return;
   size_t size = READ_SIZE(HEAD(ptr));
   PUT(HEAD(ptr), PACK(size, 0));
   PUT(FOOT(ptr), PACK(size, 0));
@@ -182,6 +199,7 @@ void free(void *ptr) {
  *      to do better.
  */
 void *realloc(void *oldptr, size_t size) {
+  ++cnt; dbg_printf("#%d realloc, ptr = %p, size = %lu\n", cnt, oldptr, size);
   size_t oldsize;
   void *newptr;
 
@@ -195,14 +213,10 @@ void *realloc(void *oldptr, size_t size) {
   if (oldptr == NULL) {
     return malloc(size);
   }
-
   oldsize = READ_SIZE(HEAD(oldptr));
-  if (size + MIN_BLK_SIZE <= oldsize) {
-    PUT(HEAD(oldptr), PACK(size, 1));
-    PUT(FOOT(oldptr), PACK(size, 1));
-    PUT(HEAD(R_BLK(oldptr)), PACK(oldsize - size, 0));
-    PUT(FOOT(R_BLK(oldptr)), PACK(oldsize - size, 0));
-    coalesce_and_add(R_BLK(oldptr));
+  size = ALIGN(MAX(MIN_BLK_SIZE, size + 2 * WSIZE));
+  if (size <= oldsize) {
+    place(oldptr, size);
     newptr = oldptr;
   } else if (!READ_ALLOC(HEAD(R_BLK(oldptr))) &&
              oldsize + READ_SIZE(HEAD(R_BLK(oldptr))) >= size) {
@@ -213,6 +227,7 @@ void *realloc(void *oldptr, size_t size) {
     place(oldptr, size);
     newptr = oldptr;
   } else {
+    dbg_printf("realloc %ld\n", size);
     newptr = malloc(size);
     /* If realloc() fails the original block is left untouched  */
     if (!newptr) return NULL;
@@ -241,6 +256,6 @@ void *calloc(size_t nmemb, size_t size) {
  *      so nah!
  */
 void mm_checkheap(int verbose) {
-  /*Get gcc to be quiet. */
   verbose = verbose;
+  return;
 }
