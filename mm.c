@@ -35,7 +35,7 @@
 #define WSIZE 4
 #define ALIGNMENT 8
 #define DSIZE 8
-#define CHUNKSIZE (1 << 12)
+#define CHUNKSIZE (1 << 8)
 #define MIN_BLK_SIZE 24
 
 /* rounds up to the nearest multiple of ALIGNMENT */
