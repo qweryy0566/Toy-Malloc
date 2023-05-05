@@ -73,6 +73,7 @@ static char *heap_listp = 0;
 #define PACK(size, alloc) ((size) | (alloc))
 
 #define SEG_LIST_SIZE 7
+#define BASE_SIZE 48
 
 static void *lst_blk[SEG_LIST_SIZE];
 
@@ -96,7 +97,7 @@ static inline void delete_from_list(void *bp) {
   dbg_printf("delete_from_list, bp = %p, pre = %p, nxt = %p\n", bp, PRE_BLK_AT(bp), NXT_BLK_AT(bp));
   if (!PRE_BLK_AT(bp)) {
     size_t size = READ_SIZE(HEAD(bp)), at = 0;
-    for (size_t tmp = MIN_BLK_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 2, ++at);
+    for (size_t tmp = BASE_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 2, ++at);
     lst_blk[at] = NXT_BLK_AT(bp);
     dbg_printf("lst_blk[%ld] = %p, the nxt = %p\n", at, lst_blk[at], NXT_BLK_AT(lst_blk[at]));
   } else {
@@ -106,7 +107,7 @@ static inline void delete_from_list(void *bp) {
 }
 static inline void add_to_list(void *bp) {
   size_t size = READ_SIZE(HEAD(bp)), at = 0;
-  for (size_t tmp = MIN_BLK_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 2, ++at);
+  for (size_t tmp = BASE_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 2, ++at);
   dbg_printf("add_to_list, at = %ld\n", at);
   PUT_PTR(NXT_BLK_F(bp), lst_blk[at]);
   PUT_PTR(PRE_BLK_F(bp), 0);
@@ -187,7 +188,7 @@ void *malloc(size_t size) {
   void *bp = NXT_BLK_AT(heap_listp);
   dbg_printf("bp = %p\n", bp);
   for (int at = 0; at < SEG_LIST_SIZE; ++at) {
-    if (MIN_BLK_SIZE << (at << 1) < (int)size || !lst_blk[at]) continue;
+    if (BASE_SIZE << (at << 1) < (int)size || !lst_blk[at]) continue;
     for (bp = lst_blk[at]; bp; bp = NXT_BLK_AT(bp)) {/* explicit free list */
       dbg_printf("$ bp = %p\n", bp);
       if (READ_SIZE(HEAD(bp)) >= size) {
