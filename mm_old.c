@@ -45,7 +45,7 @@
 /* the pointer to the prologue block */
 static char *heap_listp = 0;
 
-static int cnt = 0;
+// static int cnt = 0;
 
 /* read or write a word at address p */
 #define GET(p) ((p) ? *(unsigned *)(p) : 0)
@@ -72,10 +72,6 @@ static int cnt = 0;
 /* pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
-#define SEG_LIST_SIZE 13
-
-static void *lst_blk[SEG_LIST_SIZE];
-
 /*
  * mm_init - Called when a new trace starts.
  */
@@ -87,32 +83,21 @@ int mm_init(void) {
   PUT(heap_listp + 6 * WSIZE, PACK(6 * WSIZE, 3)); /* prologue footer */
   PUT(heap_listp + 7 * WSIZE, PACK(0, 3));         /* epilogue header */
   heap_listp += 2 * WSIZE;
-  memset(lst_blk, 0, sizeof(lst_blk));
   dbg_printf("heap_size = %ld\n", mem_heapsize());
   return 0;
 }
 
 static inline void delete_from_list(void *bp) {
-  dbg_printf("delete_from_list, bp = %p, pre = %p, nxt = %p\n", bp, PRE_BLK_AT(bp), NXT_BLK_AT(bp));
-  if (!PRE_BLK_AT(bp)) {
-    size_t size = READ_SIZE(HEAD(bp)), at = 0;
-    for (size_t tmp = MIN_BLK_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 1, ++at);
-    lst_blk[at] = NXT_BLK_AT(bp);
-    dbg_printf("lst_blk[%ld] = %p, the nxt = %p\n", at, lst_blk[at], NXT_BLK_AT(lst_blk[at]));
-  } else {
-    PUT_PTR(NXT_BLK_F(PRE_BLK_AT(bp)), NXT_BLK_AT(bp));
-  }
+  dbg_printf("delete_from_list, pre = %p\n", PRE_BLK_AT(bp));
+  PUT_PTR(NXT_BLK_F(PRE_BLK_AT(bp)), NXT_BLK_AT(bp));
   PUT_PTR(PRE_BLK_F(NXT_BLK_AT(bp)), PRE_BLK_AT(bp));
 }
 static inline void add_to_list(void *bp) {
-  size_t size = READ_SIZE(HEAD(bp)), at = 0;
-  for (size_t tmp = MIN_BLK_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 1, ++at);
-  dbg_printf("add_to_list, at = %ld\n", at);
-  PUT_PTR(NXT_BLK_F(bp), lst_blk[at]);
-  PUT_PTR(PRE_BLK_F(bp), 0);
-  if (lst_blk[at]) PUT_PTR(PRE_BLK_F(lst_blk[at]), bp);
-  lst_blk[at] = bp;
-  dbg_printf("lst_blk[%ld] = %p\n", at, lst_blk[at]);
+  void *last_blk = NXT_BLK_AT(heap_listp);
+  PUT_PTR(PRE_BLK_F(last_blk), bp);
+  PUT_PTR(NXT_BLK_F(bp), last_blk);
+  PUT_PTR(PRE_BLK_F(bp), heap_listp);
+  PUT_PTR(NXT_BLK_F(heap_listp), bp);
 }
 
 static inline void change_alloc(void *bp, size_t size, unsigned alloc) {
@@ -152,10 +137,15 @@ static void place(void *bp, size_t size) {
   unsigned is_alloc = READ_ALLOC(HEAD(bp));
   dbg_printf("place, is_alloc = %u\n", READ_ALLOC(HEAD(bp)));
   if (blk_size >= size + MIN_BLK_SIZE) { /* split */
-    if (!is_alloc) delete_from_list(bp);
     change_alloc(bp, size, 1);
     change_alloc(R_BLK(bp), blk_size - size, 0);
-    add_to_list(R_BLK(bp));
+    if (is_alloc) add_to_list(R_BLK(bp));
+    else {
+      PUT_PTR(NXT_BLK_F(PRE_BLK_AT(bp)), R_BLK(bp));
+      PUT_PTR(PRE_BLK_F(NXT_BLK_AT(bp)), R_BLK(bp));
+      PUT_PTR(PRE_BLK_F(R_BLK(bp)), PRE_BLK_AT(bp));
+      PUT_PTR(NXT_BLK_F(R_BLK(bp)), NXT_BLK_AT(bp));
+    }
   } else { /* no split */
     if (!is_alloc) delete_from_list(bp);
     change_alloc(bp, blk_size, 1);
@@ -168,7 +158,6 @@ static void place(void *bp, size_t size) {
  */
 static void *extend_heap(size_t size) {
   void *bp = mem_sbrk(size);
-  dbg_printf("extend_heap, bp = %p\n", bp);
   if (bp == (void *)-1) return NULL;
   change_alloc(bp, size, 0);
   /* new epilogue header */
@@ -182,23 +171,17 @@ static void *extend_heap(size_t size) {
  */
 void *malloc(size_t size) {
   // if (size == 0) return NULL;
-  ++cnt; dbg_printf("#%d malloc %ld\n", cnt, size);
+  // ++cnt; dbg_printf("#%d malloc %ld\n", cnt, size);
   size = ALIGN(MAX(MIN_BLK_SIZE, size + WSIZE));
   void *bp = NXT_BLK_AT(heap_listp);
   dbg_printf("bp = %p\n", bp);
-  for (int at = 0; at < SEG_LIST_SIZE; ++at) {
-    if (MIN_BLK_SIZE << at < (int)size || !lst_blk[at]) continue;
-    for (bp = lst_blk[at]; bp; bp = NXT_BLK_AT(bp)) {/* explicit free list */
-      dbg_printf("$ bp = %p\n", bp);
-      if (READ_SIZE(HEAD(bp)) >= size) {
-        assert(!READ_ALLOC(HEAD(bp)));
-        dbg_printf("found %u, at = %d\n", READ_SIZE(HEAD(bp)), at);
-        place(bp, size);
-        dbg_printf("place done, bp = %p\n", bp);
-        return bp;
-      }
+  for (; bp; bp = NXT_BLK_AT(bp)) /* explicit free list */
+    if (READ_SIZE(HEAD(bp)) >= size) {
+      dbg_printf("found %u\n", READ_SIZE(HEAD(bp)));
+      place(bp, size);
+      dbg_printf("place done, bp = %p\n", bp);
+      return bp;
     }
-  }
   dbg_printf("extend_heap %ld\n", MAX(CHUNKSIZE, size));
   /* need to extend the heap */
   bp = extend_heap(MAX(CHUNKSIZE, size));
@@ -211,7 +194,7 @@ void *malloc(size_t size) {
  *      Computers have big memories; surely it won't be a problem.
  */
 void free(void *ptr) {
-  ++cnt; dbg_printf("#%d free %p\n", cnt, ptr);
+  // ++cnt; dbg_printf("#%d free %p\n", cnt, ptr);
   if (ptr < mem_heap_lo() || ptr > mem_heap_hi()) return;
   size_t size = READ_SIZE(HEAD(ptr));
   change_alloc(ptr, size, 0);
@@ -224,7 +207,7 @@ void free(void *ptr) {
  *      to do better.
  */
 void *realloc(void *oldptr, size_t size) {
-  ++cnt; dbg_printf("#%d realloc, ptr = %p, size = %lu\n", cnt, oldptr, size);
+  // ++cnt; dbg_printf("#%d realloc, ptr = %p, size = %lu\n", cnt, oldptr, size);
   size_t oldsize;
   void *newptr;
 
