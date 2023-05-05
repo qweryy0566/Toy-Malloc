@@ -45,7 +45,7 @@
 /* the pointer to the prologue block */
 static char *heap_listp = 0;
 
-static int cnt = 0;
+// static int cnt = 0;
 
 /* read or write a word at address p */
 #define GET(p) ((p) ? *(unsigned *)(p) : 0)
@@ -72,7 +72,7 @@ static int cnt = 0;
 /* pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
-#define SEG_LIST_SIZE 6
+#define SEG_LIST_SIZE 7
 
 static void *lst_blk[SEG_LIST_SIZE];
 
@@ -182,7 +182,7 @@ static void *extend_heap(size_t size) {
  */
 void *malloc(size_t size) {
   // if (size == 0) return NULL;
-  ++cnt; dbg_printf("#%d malloc %ld\n", cnt, size);
+  // ++cnt; dbg_printf("#%d malloc %ld\n", cnt, size);
   size = ALIGN(MAX(MIN_BLK_SIZE, size + WSIZE));
   void *bp = NXT_BLK_AT(heap_listp);
   dbg_printf("bp = %p\n", bp);
@@ -211,7 +211,7 @@ void *malloc(size_t size) {
  *      Computers have big memories; surely it won't be a problem.
  */
 void free(void *ptr) {
-  ++cnt; dbg_printf("#%d free %p\n", cnt, ptr);
+  // ++cnt; dbg_printf("#%d free %p\n", cnt, ptr);
   if (ptr < mem_heap_lo() || ptr > mem_heap_hi()) return;
   size_t size = READ_SIZE(HEAD(ptr));
   change_alloc(ptr, size, 0);
@@ -224,7 +224,7 @@ void free(void *ptr) {
  *      to do better.
  */
 void *realloc(void *oldptr, size_t size) {
-  ++cnt; dbg_printf("#%d realloc, ptr = %p, size = %lu\n", cnt, oldptr, size);
+  // ++cnt; dbg_printf("#%d realloc, ptr = %p, size = %lu\n", cnt, oldptr, size);
   size_t oldsize;
   void *newptr;
 
