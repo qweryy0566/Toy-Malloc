@@ -72,7 +72,7 @@ static char *heap_listp = 0;
 /* pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
-#define SEG_LIST_SIZE 7
+#define SEG_LIST_SIZE 6
 #define BASE_SIZE 48
 
 static void *lst_blk[SEG_LIST_SIZE];
