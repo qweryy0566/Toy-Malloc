@@ -1,5 +1,16 @@
 /*
  * reference: CS:APP 9.9.12
+ * The implementation of this malloc package uses an segregated list to store
+ * free blocks. The list is divided into 6 parts, and the i-th part stores the
+ * blocks whose size is in [48*4^i, 48*4^i+1). The order of the blocks in the
+ * list is the same as the order of the time they are freed, and the fit policy
+ * is first fit.
+ * 
+ * The minimum size of a block is 24 bytes.
+ * 
+ * A free block has a header and a footer, and the header and footer store the
+ * size of the block and the allocated bit. And an allocated block only has a
+ * header, the allocated bit of which is stored in the next block's header.
  */
 #include "mm.h"
 
@@ -81,18 +92,19 @@ static void *lst_blk[SEG_LIST_SIZE];
  * mm_init - Called when a new trace starts.
  */
 int mm_init(void) {
-  if ((heap_listp = mem_sbrk(8 * WSIZE)) == (void *)-1) return -1;
-  PUT(heap_listp + 1 * WSIZE, PACK(6 * WSIZE, 3)); /* prologue header */
-  PUT_PTR(heap_listp + 2 * WSIZE, 0);              /* prev pointer */
-  PUT_PTR(heap_listp + 4 * WSIZE, 0);              /* next pointer */
-  PUT(heap_listp + 6 * WSIZE, PACK(6 * WSIZE, 3)); /* prologue footer */
-  PUT(heap_listp + 7 * WSIZE, PACK(0, 3));         /* epilogue header */
+  if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1) return -1;
+  PUT(heap_listp + 1 * WSIZE, PACK(2 * WSIZE, 3)); /* prologue header */
+  PUT(heap_listp + 2 * WSIZE, PACK(2 * WSIZE, 3)); /* prologue footer */
+  PUT(heap_listp + 3 * WSIZE, PACK(0, 3));         /* epilogue header */
   heap_listp += 2 * WSIZE;
   memset(lst_blk, 0, sizeof(lst_blk));
   dbg_printf("heap_size = %ld\n", mem_heapsize());
   return 0;
 }
 
+/*
+ * delete_from_list - delete a block from the free list
+ */
 static inline void delete_from_list(void *bp) {
   dbg_printf("delete_from_list, bp = %p, pre = %p, nxt = %p\n", bp, PRE_BLK_AT(bp), NXT_BLK_AT(bp));
   if (!PRE_BLK_AT(bp)) {
@@ -105,6 +117,9 @@ static inline void delete_from_list(void *bp) {
   }
   PUT_PTR(PRE_BLK_F(NXT_BLK_AT(bp)), PRE_BLK_AT(bp));
 }
+/*
+ * add_to_list - add a block to the free list
+ */
 static inline void add_to_list(void *bp) {
   size_t size = READ_SIZE(HEAD(bp)), at = 0;
   for (size_t tmp = BASE_SIZE; tmp < size && at < SEG_LIST_SIZE - 1; tmp <<= 2, ++at);
@@ -115,7 +130,11 @@ static inline void add_to_list(void *bp) {
   lst_blk[at] = bp;
   dbg_printf("lst_blk[%ld] = %p\n", at, lst_blk[at]);
 }
-
+/*
+ * change_alloc - change the alloc bit of a block. Since an allocated block
+ *               has no footer, we need to change the alloc bit in its right
+ *               block as well.
+ */
 static inline void change_alloc(void *bp, size_t size, unsigned alloc) {
   PUT(HEAD(bp), PACK(size, READ_L_ALLOC(HEAD(bp)) | alloc));
   if (!alloc) PUT(FOOT(bp), PACK(size, READ_L_ALLOC(HEAD(bp)) | alloc));
@@ -123,6 +142,10 @@ static inline void change_alloc(void *bp, size_t size, unsigned alloc) {
                             alloc << 1 | READ_ALLOC(HEAD(R_BLK(bp)))));
 }
 
+/*
+ * coalesce_and_add - coalesce a block with its neighbors and add it to the
+ *                    free list
+ */
 static void *coalesce_and_add(void *bp) {
   dbg_printf("coalesce_and_add, bp = %p\n", bp);
   size_t size = READ_SIZE(HEAD(bp));
@@ -277,10 +300,17 @@ void *calloc(size_t nmemb, size_t size) {
 }
 
 /*
- * mm_checkheap - There are no bugs in my code, so I don't need to check,
- *      so nah!
+ * mm_checkheap - check the heap for consistency, including size and
+ *      alignment.
  */
 void mm_checkheap(int verbose) {
-  verbose = verbose;
+  void *bp;
+  for (bp = heap_listp; READ_SIZE(HEAD(bp)) > 0; bp = R_BLK(bp)) {
+    assert(READ_SIZE(HEAD(bp)) >= MIN_BLK_SIZE);
+    assert(READ_SIZE(HEAD(bp)) % ALIGNMENT == 0);
+    assert(READ_SIZE(HEAD(bp)) == READ_SIZE(FOOT(bp)));
+    assert(READ_ALLOC(HEAD(bp)) == READ_L_ALLOC(HEAD(R_BLK(bp))));
+    assert(READ_ALLOC(HEAD(bp)) == READ_ALLOC(FOOT(bp)));
+  }
   return;
 }
